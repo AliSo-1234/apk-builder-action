@@ -30,7 +30,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       # ---------------------------------------------------------
       # 1. Clone the selected Android project FIRST.
       #    This must happen before setup-java because Gradle
@@ -39,6 +38,8 @@ jobs:
       - name: Clone project
         shell: bash
         run: |
+          rm -rf workspace
+
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
             git clone --recurse-submodules --depth=1 \
               "${{ github.event.inputs.repository }}" \
@@ -112,27 +113,35 @@ jobs:
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           echo "========================================"
           echo "Preparing Gradle"
           echo "========================================"
 
-          # Open Jarvis does not contain gradlew, so create a
-          # Gradle wrapper for it.
-          #
-          # If another project already contains gradlew,
-          # DO NOT replace it.
+          # If the project does not include its own Gradle wrapper,
+          # generate a compatible one. Many Android projects are
+          # built with AGP + Gradle 8.x, not Gradle 9.x.
           if [[ ! -f "gradlew" ]]; then
             echo "No Gradle wrapper found."
-            echo "Creating Gradle 9.7 wrapper..."
-            gradle wrapper --gradle-version 9.7
+            echo "Creating a compatible Gradle wrapper..."
+            gradle wrapper --gradle-version 8.7
           else
             echo "Gradle wrapper found."
             echo "Using the project's existing Gradle wrapper."
           fi
 
           chmod +x gradlew
+
+          # Android projects usually require local.properties
+          # so the SDK path is known to Gradle.
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -n "${ANDROID_SDK_ROOT}" ]]; then
+            echo "Writing local.properties for SDK: ${ANDROID_SDK_ROOT}"
+            printf 'sdk.dir=%s\n' "${ANDROID_SDK_ROOT}" > local.properties
+          else
+            echo "::warning::ANDROID_SDK_ROOT/ANDROID_HOME is not set; local.properties could not be generated."
+          fi
 
           echo ""
           echo "========================================"
