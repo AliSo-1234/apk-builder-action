@@ -1,5 +1,6 @@
 name: Build Android APK
-run-name: ${{ github.event.inputs.repository }} ${{ github.event.inputs.branchName && format('{0}', github.event.inputs.branchName) }} ${{ github.event.inputs.subdir && format('[/{0}]', github.event.inputs.subdir) }}
+
+run-name: Build ${{ github.event.inputs.repository }}
 
 on:
   workflow_dispatch:
@@ -7,21 +8,25 @@ on:
       repository:
         description: "Git repository URL"
         required: true
-        default: "https://github.com/android/sunflower"
+        default: "https://github.com/tokenarc/open-jarvis"
+
       branchName:
         description: "Git branch name [Optional]"
         required: false
         default: ""
+
       subdir:
-        description: "Relative subdirectory path when the project is nested [Optional]"
+        description: "Relative subdirectory path [Optional]"
         required: false
         default: ""
+
       jdkVersion:
-        description: "OpenJDK version: 8, 17, 21, 25, …"
+        description: "JDK version"
         required: false
         default: "17"
+
       taskName:
-        description: "build.gradle task name: assembleDebug, assembleRelease, etc."
+        description: "Gradle task"
         required: false
         default: "assembleRelease"
 
@@ -30,30 +35,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------------------
-      # 1. Clone the selected Android project FIRST.
-      #    This must happen before setup-java because Gradle
-      #    caching needs to see the project's Gradle files.
-      # ---------------------------------------------------------
+
       - name: Clone project
         shell: bash
         run: |
-          rm -rf workspace
+          set -e
+
+          echo "Cloning Open Jarvis..."
 
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
-            git clone --recurse-submodules --depth=1 \
+            git clone --depth=1 \
               "${{ github.event.inputs.repository }}" \
               workspace
           else
-            git clone --recurse-submodules --depth=1 \
+            git clone --depth=1 \
               --branch "${{ github.event.inputs.branchName }}" \
               "${{ github.event.inputs.repository }}" \
               workspace
           fi
 
-      # ---------------------------------------------------------
-      # 2. Setup Java AFTER the project has been cloned.
-      # ---------------------------------------------------------
+          echo ""
+          echo "Project files:"
+          ls -la workspace
+
       - name: Setup JDK
         uses: actions/setup-java@v5
         with:
@@ -64,74 +68,118 @@ jobs:
             workspace/**/*.gradle*
             workspace/**/gradle-wrapper.properties
             workspace/**/gradle/*.versions.toml
-            workspace/**/versions.properties
 
-      # ---------------------------------------------------------
-      # 3. Setup Android SDK.
-      # ---------------------------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
 
-      # ---------------------------------------------------------
-      # 4. Show the selected build settings.
-      # ---------------------------------------------------------
-      - name: Summarize build inputs
+      - name: Install Android SDK 34
         shell: bash
         run: |
-          REPO='${{ github.event.inputs.repository }}'
-          BRANCH='${{ github.event.inputs.branchName }}'
-          SUBDIR='${{ github.event.inputs.subdir }}'
-          JDK='${{ github.event.inputs.jdkVersion }}'
-          TASK='${{ github.event.inputs.taskName }}'
+          yes | sdkmanager --licenses > /dev/null || true
 
-          if [ -z "$BRANCH" ]; then
-            BRANCH=$(git -C workspace rev-parse --abbrev-ref HEAD 2>/dev/null || echo "default")
-          fi
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
 
-          if [ -z "$SUBDIR" ]; then
-            SUBDIR_DISPLAY="_project root_"
-          else
-            SUBDIR_DISPLAY="\`$SUBDIR\`"
-          fi
-
-          {
-            echo "## :clipboard: Build Inputs"
-            echo ""
-            echo "- **repository:** [$REPO]($REPO)"
-            echo "- **branchName:** \`$BRANCH\`"
-            echo "- **subdir:** $SUBDIR_DISPLAY"
-            echo "- **jdkVersion:** \`$JDK\`"
-            echo "- **taskName:** \`$TASK\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # ---------------------------------------------------------
-      # 5. Build the APK.
-      # ---------------------------------------------------------
-      - name: Build APK
+      - name: Prepare Gradle
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           echo "========================================"
           echo "Preparing Gradle"
           echo "========================================"
 
-          GRADLE_VERSION="8.9"
-
-          # If the project has no wrapper, generate a compatibility wrapper.
-          # Many Android projects expect AGP + Gradle 8.x, not Gradle 9/10.
-          if [[ ! -f "gradlew" ]]; then
-            echo "No Gradle wrapper found."
-            echo "Creating a compatible Gradle wrapper (Gradle ${GRADLE_VERSION})..."
-            gradle wrapper --gradle-version "${GRADLE_VERSION}"
+          if [[ -f "gradlew" ]]; then
+            echo "Gradle wrapper already exists."
+            chmod +x gradlew
           else
-            echo "Gradle wrapper found."
-            echo "Checking if the existing wrapper is too new for this project..."
-            CURRENT_WRAPPER_VERSION="$(./gradlew -q properties 2>/dev/null | awk '/^version:/{print $2}' || true)"
-            if [[ -n "${CURRENT_WRAPPER_VERSION}" ]] && [[ "${CURRENT_WRAPPER_VERSION}" =~ ^9\.|^10\. ]]; then
-              echo "Detected a Gradle ${CURRENT_WRAPPER_VERSION} wrapper. Replacing it with Gradle ${GRADLE_VERSION} for compatibility."
-              gradle wrapper
-
+            echo "No Gradle wrapper found."
+            echo "Creating Gradle 8.2 wrapper..."
+
+            gradle wrapper --gradle-version 8.2
+
+            chmod +x gradlew
+          fi
+
+          echo ""
+          echo "Gradle version:"
+          ./gradlew --version
+
+      - name: Build APK
+        working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        shell: bash
+        run: |
+          set -o pipefail
+
+          echo "========================================"
+          echo "Building Open Jarvis"
+          echo "========================================"
+
+          LOG_FILE="$RUNNER_TEMP/gradle-build.log"
+
+          if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
+
+            echo "Preparing debug signing key..."
+
+            mkdir -p "$HOME/.android"
+
+            if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
+              keytool -genkeypair \
+                -v \
+                -keystore "$HOME/.android/debug.keystore" \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "C=US, O=Android, CN=Android Debug"
+            fi
+
+            ./gradlew "${{ github.event.inputs.taskName }}" \
+              -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
+              -Pandroid.injected.signing.store.password=android \
+              -Pandroid.injected.signing.key.alias=androiddebugkey \
+              -Pandroid.injected.signing.key.password=android \
+              --no-daemon \
+              --stacktrace \
+              --info \
+              --warning-mode all \
+              2>&1 | tee "$LOG_FILE"
+
+          else
+
+            ./gradlew "${{ github.event.inputs.taskName }}" \
+              --no-daemon \
+              --stacktrace \
+              --info \
+              --warning-mode all \
+              2>&1 | tee "$LOG_FILE"
+
+          fi
+
+      - name: Find APK
+        if: success()
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "Generated APK files"
+          echo "========================================"
+
+          find workspace \
+            -type f \
+            -name "*.apk" \
+            -print
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: open-jarvis-apk
+          path: workspace/**/*.apk
+          retention-days: 7
