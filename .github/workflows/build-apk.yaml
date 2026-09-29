@@ -30,18 +30,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: "temurin"
-          java-version: ${{ github.event.inputs.jdkVersion }}
-          cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: "true"
-
+      # ---------------------------------------------------------
+      # 1. Clone the selected Android project FIRST.
+      #    This must happen before setup-java because Gradle
+      #    caching needs to see the project's Gradle files.
+      # ---------------------------------------------------------
       - name: Clone project
         shell: bash
         run: |
@@ -56,6 +50,32 @@ jobs:
               workspace
           fi
 
+      # ---------------------------------------------------------
+      # 2. Setup Java AFTER the project has been cloned.
+      # ---------------------------------------------------------
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ github.event.inputs.jdkVersion }}
+          cache: gradle
+          cache-dependency-path: |
+            workspace/**/*.gradle*
+            workspace/**/gradle-wrapper.properties
+            workspace/**/gradle/*.versions.toml
+            workspace/**/versions.properties
+
+      # ---------------------------------------------------------
+      # 3. Setup Android SDK.
+      # ---------------------------------------------------------
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+
+      # ---------------------------------------------------------
+      # 4. Show the selected build settings.
+      # ---------------------------------------------------------
       - name: Summarize build inputs
         shell: bash
         run: |
@@ -85,6 +105,9 @@ jobs:
             echo "- **taskName:** \`$TASK\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ---------------------------------------------------------
+      # 5. Build the APK.
+      # ---------------------------------------------------------
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
@@ -95,12 +118,19 @@ jobs:
           echo "Preparing Gradle"
           echo "========================================"
 
+          # Open Jarvis does not contain gradlew, so create a
+          # Gradle 8.2.1 wrapper for it.
+          #
+          # If another project already contains gradlew,
+          # DO NOT replace it.
           if [[ ! -f "gradlew" ]]; then
             echo "No Gradle wrapper found."
             echo "Creating Gradle 8.2.1 wrapper..."
+
             gradle wrapper --gradle-version 8.2.1
           else
-            echo "Gradle wrapper found. Using the project's wrapper."
+            echo "Gradle wrapper found."
+            echo "Using the project's existing Gradle wrapper."
           fi
 
           chmod +x gradlew
@@ -126,6 +156,10 @@ jobs:
             echo "::warning::sdkmanager was not found in PATH."
           fi
 
+          # Accept licenses in case additional SDK components
+          # are required by the project.
+          yes | sdkmanager --licenses > /dev/null || true
+
           LOG_FILE="$(mktemp)"
 
           handle_failure() {
@@ -140,6 +174,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
+          # -----------------------------------------------------
+          # Release build
+          # -----------------------------------------------------
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
 
             echo ""
@@ -187,6 +224,9 @@ jobs:
 
             set -e
 
+          # -----------------------------------------------------
+          # Non-release build
+          # -----------------------------------------------------
           else
 
             echo ""
@@ -209,6 +249,9 @@ jobs:
 
           fi
 
+          # -----------------------------------------------------
+          # Handle failure.
+          # -----------------------------------------------------
           if [ "$STATUS" -ne 0 ]; then
             echo ""
             echo "========================================"
@@ -225,6 +268,9 @@ jobs:
           echo "BUILD SUCCESSFUL"
           echo "========================================"
 
+      # ---------------------------------------------------------
+      # 6. Show where the APK was generated.
+      # ---------------------------------------------------------
       - name: Find generated APKs
         if: success()
         shell: bash
@@ -232,6 +278,9 @@ jobs:
           echo "Generated APK files:"
           find workspace -type f -name "*.apk" -print
 
+      # ---------------------------------------------------------
+      # 7. Upload APK.
+      # ---------------------------------------------------------
       - name: Upload the APK artifact with 1 day retention
         if: success()
         uses: actions/upload-artifact@v6
