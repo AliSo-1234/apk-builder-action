@@ -84,30 +84,62 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-      - name: Prepare Gradle
+            - name: Prepare Gradle
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Preparing Gradle"
+          echo "Preparing Gradle 8.2.1"
           echo "========================================"
 
-          if [[ -f "gradlew" ]]; then
-            echo "Gradle wrapper already exists."
-            chmod +x gradlew
-          else
-            echo "No Gradle wrapper found."
-            echo "Creating Gradle 8.2 wrapper..."
+          GRADLE_VERSION="8.2.1"
+          GRADLE_DIR="$RUNNER_TEMP/gradle-${GRADLE_VERSION}"
+          GRADLE_ZIP="$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip"
 
-            gradle wrapper --gradle-version 8.2
+          if [[ ! -f "$GRADLE_DIR/bin/gradle" ]]; then
+            echo "Downloading Gradle ${GRADLE_VERSION}..."
 
-            chmod +x gradlew
+            curl -fL \
+              "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+              -o "$GRADLE_ZIP"
+
+            rm -rf "$GRADLE_DIR"
+
+            mkdir -p "$RUNNER_TEMP/gradle-extract"
+
+            unzip -q "$GRADLE_ZIP" \
+              -d "$RUNNER_TEMP/gradle-extract"
+
+            mv \
+              "$RUNNER_TEMP/gradle-extract/gradle-${GRADLE_VERSION}" \
+              "$GRADLE_DIR"
           fi
 
           echo ""
-          echo "Gradle version:"
+          echo "Using:"
+          "$GRADLE_DIR/bin/gradle" --version
+
+          echo ""
+          echo "========================================"
+          echo "Creating Gradle wrapper"
+          echo "========================================"
+
+          if [[ ! -f "gradlew" ]]; then
+            "$GRADLE_DIR/bin/gradle" wrapper \
+              --gradle-version "${GRADLE_VERSION}"
+          else
+            echo "Gradle wrapper already exists."
+          fi
+
+          chmod +x gradlew
+
+          echo ""
+          echo "========================================"
+          echo "Testing Gradle wrapper"
+          echo "========================================"
+
           ./gradlew --version
 
       - name: Build APK
