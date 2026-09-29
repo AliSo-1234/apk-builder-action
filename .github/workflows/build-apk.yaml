@@ -27,7 +27,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # Android SDK is built into this image
+    runs-on: ubuntu-latest
 
     steps:
       - name: Setup JDK
@@ -35,16 +35,29 @@ jobs:
         with:
           distribution: "temurin"
           java-version: ${{ github.event.inputs.jdkVersion }}
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: "true"
 
       - name: Clone project
+        shell: bash
         run: |
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
-            git clone --recurse-submodules --depth=1 ${{ github.event.inputs.repository }} workspace
+            git clone --recurse-submodules --depth=1 \
+              "${{ github.event.inputs.repository }}" \
+              workspace
           else
-            git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} ${{ github.event.inputs.repository }} workspace
+            git clone --recurse-submodules --depth=1 \
+              --branch "${{ github.event.inputs.branchName }}" \
+              "${{ github.event.inputs.repository }}" \
+              workspace
           fi
 
       - name: Summarize build inputs
+        shell: bash
         run: |
           REPO='${{ github.event.inputs.repository }}'
           BRANCH='${{ github.event.inputs.branchName }}'
@@ -74,48 +87,73 @@ jobs:
 
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        shell: bash
         run: |
-          if [ ! -f "gradlew" ]; then
-          echo "No Gradle wrapper found. Creating one with Gradle 8.2.1..."
-          gradle wrapper --gradle-version 8.2.1
+          set -o pipefail
+
+          echo "========================================"
+          echo "Preparing Gradle"
+          echo "========================================"
+
+          if [[ ! -f "gradlew" ]]; then
+            echo "No Gradle wrapper found."
+            echo "Creating Gradle 8.2.1 wrapper..."
+            gradle wrapper --gradle-version 8.2.1
+          else
+            echo "Gradle wrapper found. Using the project's wrapper."
           fi
 
           chmod +x gradlew
 
-          # Accept all Android SDK/NDK licenses non-interactively.
-          yes | sdkmanager --licenses > /dev/null || true
+          echo ""
+          echo "========================================"
+          echo "Gradle version"
+          echo "========================================"
+
+          ./gradlew --version
+
+          echo ""
+          echo "========================================"
+          echo "Android SDK"
+          echo "========================================"
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-not-set}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-not-set}"
+
+          if command -v sdkmanager >/dev/null 2>&1; then
+            echo "sdkmanager found."
+          else
+            echo "::warning::sdkmanager was not found in PATH."
+          fi
 
           LOG_FILE="$(mktemp)"
 
           handle_failure() {
             {
-              echo '## :x: Gradle Build Failed — `${{ github.event.inputs.taskName }}`'
+              echo "## :x: Gradle Build Failed — \`${{ github.event.inputs.taskName }}\`"
               echo ""
-
-              if grep -q "What went wrong:" "$LOG_FILE"; then
-                echo '```'
-                awk '/\* What went wrong:/{p=1} p; /\* Try:/{if(p) exit}' "$LOG_FILE"
-                echo '```'
-              else
-                echo 'No `* What went wrong:` block found. Tail of build log:'
-                echo '```'
-                tail -n 100 "$LOG_FILE"
-                echo '```'
-              fi
-
+              echo "### Complete Gradle output"
               echo ""
-              echo '> Full logs are available in the "Build APK" step output above.'
+              echo '```text'
+              cat "$LOG_FILE"
+              echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
-            echo "Task contains 'Release', attempting to sign a release build with a debug key."
+
+            echo ""
+            echo "========================================"
+            echo "Preparing debug signing key"
+            echo "========================================"
 
             if [ ! -f "$HOME/.android/debug.keystore" ]; then
               echo "Debug keystore not found. Creating one..."
 
-              keytool -genkey -v \
-                -keystore debug.keystore \
+              mkdir -p "$HOME/.android"
+
+              keytool -genkeypair -v \
+                -keystore "$HOME/.android/debug.keystore" \
                 -storepass android \
                 -alias androiddebugkey \
                 -keypass android \
@@ -123,47 +161,79 @@ jobs:
                 -keysize 2048 \
                 -validity 10000 \
                 -dname "C=US, O=Android, CN=Android Debug"
-
-              mkdir -p "$HOME/.android"
-              mv debug.keystore "$HOME/.android/debug.keystore"
+            else
+              echo "Debug keystore already exists."
             fi
 
-            set +e
-            set -o pipefail
+            echo ""
+            echo "========================================"
+            echo "Building RELEASE APK"
+            echo "========================================"
 
-            ./gradlew ${{ github.event.inputs.taskName }} \
+            set +e
+
+            ./gradlew "${{ github.event.inputs.taskName }}" \
               -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
               -Pandroid.injected.signing.store.password=android \
               -Pandroid.injected.signing.key.alias=androiddebugkey \
               -Pandroid.injected.signing.key.password=android \
-              --stacktrace 2>&1 | tee "$LOG_FILE"
+              --no-daemon \
+              --stacktrace \
+              --info \
+              --warning-mode all \
+              2>&1 | tee "$LOG_FILE"
 
             STATUS=${PIPESTATUS[0]}
 
             set -e
 
-            if [ $STATUS -ne 0 ]; then
-              handle_failure
-              exit $STATUS
-            fi
           else
-            set +e
-            set -o pipefail
 
-            ./gradlew ${{ github.event.inputs.taskName }} \
-              --stacktrace 2>&1 | tee "$LOG_FILE"
+            echo ""
+            echo "========================================"
+            echo "Building APK"
+            echo "========================================"
+
+            set +e
+
+            ./gradlew "${{ github.event.inputs.taskName }}" \
+              --no-daemon \
+              --stacktrace \
+              --info \
+              --warning-mode all \
+              2>&1 | tee "$LOG_FILE"
 
             STATUS=${PIPESTATUS[0]}
 
             set -e
 
-            if [ $STATUS -ne 0 ]; then
-              handle_failure
-              exit $STATUS
-            fi
           fi
 
+          if [ "$STATUS" -ne 0 ]; then
+            echo ""
+            echo "========================================"
+            echo "BUILD FAILED"
+            echo "========================================"
+
+            handle_failure
+
+            exit "$STATUS"
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "BUILD SUCCESSFUL"
+          echo "========================================"
+
+      - name: Find generated APKs
+        if: success()
+        shell: bash
+        run: |
+          echo "Generated APK files:"
+          find workspace -type f -name "*.apk" -print
+
       - name: Upload the APK artifact with 1 day retention
+        if: success()
         uses: actions/upload-artifact@v6
         with:
           path: workspace/**/*.apk
