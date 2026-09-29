@@ -76,7 +76,8 @@ jobs:
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
           if [ ! -f "gradlew" ]; then
-            gradle wrapper
+          echo "No Gradle wrapper found. Creating one with Gradle 8.2.1..."
+          gradle wrapper --gradle-version 8.2.1
           fi
 
           chmod +x gradlew
