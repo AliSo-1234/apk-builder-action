@@ -1,5 +1,5 @@
 name: Build Android APK
-run-name: ${{ github.event.inputs.repository }} ${{ github.event.inputs.branchName && format('{0}', github.event.inputs.branchName) }} ${{ github.event.inputs.subdir && format('[/{0}]', github.event.inputs.subdir) }} :${{ github.event.inputs.taskName }}
+run-name: ${{ github.event.inputs.repository }} ${{ github.event.inputs.branchName && format('{0}', github.event.inputs.branchName) }} ${{ github.event.inputs.subdir && format('[/{0}]', github.event.inputs.subdir) }}
 
 on:
   workflow_dispatch:
@@ -119,15 +119,14 @@ jobs:
           echo "========================================"
 
           # Open Jarvis does not contain gradlew, so create a
-          # Gradle 8.2.1 wrapper for it.
+          # Gradle wrapper for it.
           #
           # If another project already contains gradlew,
           # DO NOT replace it.
           if [[ ! -f "gradlew" ]]; then
             echo "No Gradle wrapper found."
-            echo "Creating Gradle 8.2.1 wrapper..."
-
-            gradle wrapper --gradle-version 8.2.1
+            echo "Creating Gradle 9.7 wrapper..."
+            gradle wrapper --gradle-version 9.7
           else
             echo "Gradle wrapper found."
             echo "Using the project's existing Gradle wrapper."
