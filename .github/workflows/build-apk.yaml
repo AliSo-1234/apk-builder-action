@@ -119,16 +119,24 @@ jobs:
           echo "Preparing Gradle"
           echo "========================================"
 
-          # If the project does not include its own Gradle wrapper,
-          # generate a compatible one. Many Android projects are
-          # built with AGP + Gradle 8.x, not Gradle 9.x.
+          GRADLE_VERSION="8.9"
+
+          # If the project has no wrapper, generate a compatibility wrapper.
+          # Many Android projects expect AGP + Gradle 8.x, not Gradle 9/10.
           if [[ ! -f "gradlew" ]]; then
             echo "No Gradle wrapper found."
-            echo "Creating a compatible Gradle wrapper..."
-            gradle wrapper --gradle-version 8.5
+            echo "Creating a compatible Gradle wrapper (Gradle ${GRADLE_VERSION})..."
+            gradle wrapper --gradle-version "${GRADLE_VERSION}"
           else
             echo "Gradle wrapper found."
-            echo "Using the project's existing Gradle wrapper."
+            echo "Checking if the existing wrapper is too new for this project..."
+            CURRENT_WRAPPER_VERSION="$(./gradlew -q properties 2>/dev/null | awk '/^version:/{print $2}' || true)"
+            if [[ -n "${CURRENT_WRAPPER_VERSION}" ]] && [[ "${CURRENT_WRAPPER_VERSION}" =~ ^9\.|^10\. ]]; then
+              echo "Detected a Gradle ${CURRENT_WRAPPER_VERSION} wrapper. Replacing it with Gradle ${GRADLE_VERSION} for compatibility."
+              gradle wrapper --gradle-version "${GRADLE_VERSION}"
+            else
+              echo "Using the project's existing Gradle wrapper."
+            fi
           fi
 
           chmod +x gradlew
@@ -182,6 +190,15 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
+          # Common Gradle arguments for compatibility
+          COMMON_ARGS=(
+            -PbuildFlowServiceProperty=false
+            --no-daemon
+            --stacktrace
+            --info
+            --warning-mode all
+          )
+
           # -----------------------------------------------------
           # Release build
           # -----------------------------------------------------
@@ -222,6 +239,7 @@ jobs:
               -Pandroid.injected.signing.store.password=android \
               -Pandroid.injected.signing.key.alias=androiddebugkey \
               -Pandroid.injected.signing.key.password=android \
+              -PbuildFlowServiceProperty=false \
               --no-daemon \
               --stacktrace \
               --info \
@@ -245,6 +263,7 @@ jobs:
             set +e
 
             ./gradlew "${{ github.event.inputs.taskName }}" \
+              -PbuildFlowServiceProperty=false \
               --no-daemon \
               --stacktrace \
               --info \
