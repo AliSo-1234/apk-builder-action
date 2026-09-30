@@ -35,27 +35,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Clone project
         shell: bash
         run: |
           set -e
 
-          echo "Cloning Open Jarvis..."
+          git clone --depth=1 \
+            "${{ github.event.inputs.repository }}" \
+            workspace
 
-          if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
-            git clone --depth=1 \
-              "${{ github.event.inputs.repository }}" \
-              workspace
-          else
-            git clone --depth=1 \
-              --branch "${{ github.event.inputs.branchName }}" \
-              "${{ github.event.inputs.repository }}" \
-              workspace
-          fi
-
-          echo ""
-          echo "Project files:"
+          echo "Project cloned."
           ls -la workspace
 
       - name: Setup JDK
@@ -63,16 +52,9 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ github.event.inputs.jdkVersion }}
-          cache: gradle
-          cache-dependency-path: |
-            workspace/**/*.gradle*
-            workspace/**/gradle-wrapper.properties
-            workspace/**/gradle/*.versions.toml
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: true
 
       - name: Install Android SDK 34
         shell: bash
@@ -85,125 +67,91 @@ jobs:
             "build-tools;34.0.0"
 
       - name: Prepare Gradle
-        working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        working-directory: workspace
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
-          echo "Preparing Gradle 8.2.1"
-          echo "========================================"
-
           GRADLE_VERSION="8.2.1"
-          GRADLE_DIR="$RUNNER_TEMP/gradle-${GRADLE_VERSION}"
-          GRADLE_ZIP="$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip"
+          GRADLE_DIR="$RUNNER_TEMP/gradle-$GRADLE_VERSION"
+          GRADLE_ZIP="$RUNNER_TEMP/gradle-$GRADLE_VERSION-bin.zip"
 
-          if [[ ! -f "$GRADLE_DIR/bin/gradle" ]]; then
-            echo "Downloading Gradle ${GRADLE_VERSION}..."
+          echo "Preparing Gradle $GRADLE_VERSION"
 
+          if [ ! -f "$GRADLE_DIR/bin/gradle" ]; then
             curl -fL \
               "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
               -o "$GRADLE_ZIP"
 
-            rm -rf "$GRADLE_DIR"
-
             mkdir -p "$RUNNER_TEMP/gradle-extract"
 
-            unzip -q "$GRADLE_ZIP" \
+            unzip -q \
+              "$GRADLE_ZIP" \
               -d "$RUNNER_TEMP/gradle-extract"
+
+            rm -rf "$GRADLE_DIR"
 
             mv \
               "$RUNNER_TEMP/gradle-extract/gradle-${GRADLE_VERSION}" \
               "$GRADLE_DIR"
           fi
 
-          echo ""
-          echo "Using:"
           "$GRADLE_DIR/bin/gradle" --version
 
-          echo ""
-          echo "========================================"
-          echo "Creating Gradle wrapper"
-          echo "========================================"
-
-          if [[ ! -f "gradlew" ]]; then
+          if [ ! -f "gradlew" ]; then
             "$GRADLE_DIR/bin/gradle" wrapper \
-              --gradle-version "${GRADLE_VERSION}"
-          else
-            echo "Gradle wrapper already exists."
+              --gradle-version "$GRADLE_VERSION"
           fi
 
           chmod +x gradlew
 
-          echo ""
-          echo "========================================"
-          echo "Testing Gradle wrapper"
-          echo "========================================"
-
           ./gradlew --version
 
       - name: Build APK
-        working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        working-directory: workspace
         shell: bash
         run: |
+          set -e
           set -o pipefail
 
           echo "========================================"
           echo "Building Open Jarvis"
           echo "========================================"
 
-          LOG_FILE="$RUNNER_TEMP/gradle-build.log"
+          mkdir -p "$HOME/.android"
 
-          if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
-
-            echo "Preparing debug signing key..."
-
-            mkdir -p "$HOME/.android"
-
-            if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-              keytool -genkeypair \
-                -v \
-                -keystore "$HOME/.android/debug.keystore" \
-                -storepass android \
-                -alias androiddebugkey \
-                -keypass android \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -dname "C=US, O=Android, CN=Android Debug"
-            fi
-
-            ./gradlew "${{ github.event.inputs.taskName }}" \
-              -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
-              -Pandroid.injected.signing.store.password=android \
-              -Pandroid.injected.signing.key.alias=androiddebugkey \
-              -Pandroid.injected.signing.key.password=android \
-              --no-daemon \
-              --stacktrace \
-              --info \
-              --warning-mode all \
-              2>&1 | tee "$LOG_FILE"
-
-          else
-
-            ./gradlew "${{ github.event.inputs.taskName }}" \
-              --no-daemon \
-              --stacktrace \
-              --info \
-              --warning-mode all \
-              2>&1 | tee "$LOG_FILE"
-
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair \
+              -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "C=US, O=Android, CN=Android Debug"
           fi
+
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android \
+            --no-daemon \
+            --stacktrace \
+            --info
 
       - name: Find APK
         if: success()
+        working-directory: workspace
         shell: bash
         run: |
           echo "========================================"
-          echo "Generated APK files"
+          echo "APK files"
           echo "========================================"
 
-          find workspace \
+          find . \
             -type f \
             -name "*.apk" \
             -print
@@ -214,4 +162,5 @@ jobs:
         with:
           name: open-jarvis-apk
           path: workspace/**/*.apk
+          if-no-files-found: error
           retention-days: 7
