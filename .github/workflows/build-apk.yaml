@@ -85,7 +85,7 @@ jobs:
             "build-tools;34.0.0"
 
             - name: Prepare Gradle
-       working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
         run: |
           set -e
