@@ -84,7 +84,7 @@ jobs:
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-            - name:Prepare Gradle
+            - name: Prepare Gradle
        working-directory: ./workspace/${{ github.event.inputs.subdir }}
         shell: bash
         run: |
