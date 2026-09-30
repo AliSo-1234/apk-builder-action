@@ -107,6 +107,24 @@ jobs:
 
           ./gradlew --version
 
+      - name: Configure gradle.properties
+        working-directory: workspace
+        shell: bash
+        run: |
+          echo "Creating gradle.properties with AndroidX configuration..."
+          cat > gradle.properties << 'EOF'
+# AndroidX Configuration
+android.useAndroidX=true
+android.enableJetifier=true
+
+# Performance optimizations
+org.gradle.jvmargs=-Xmx2048m
+org.gradle.parallel=true
+org.gradle.caching=true
+EOF
+          echo "gradle.properties created successfully"
+          cat gradle.properties
+
       - name: Build APK
         working-directory: workspace
         shell: bash
